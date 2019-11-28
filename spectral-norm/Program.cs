@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace spectral_norm
 {
-    public class Program
+    public unsafe class Program
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static double A(int i, int j)
@@ -14,7 +14,7 @@ namespace spectral_norm
             return (i + j) * (i + j + 1) / 2 + i + 1;
         }
 
-        private static unsafe double dot(double* v, double* u, int n)
+        private static double dot(double* v, double* u, int n)
         {
             double sum = 0;
             for (var i = 0; i < n; i++)
@@ -23,7 +23,7 @@ namespace spectral_norm
         }
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        private static unsafe void mult_Av(double* v, double* outv, int n)
+        private static void mult_Av(double* v, double* outv, int n)
         {
             Parallel.For(0, n, i =>
             {
@@ -42,7 +42,7 @@ namespace spectral_norm
         }
 
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        private static unsafe void mult_Atv(double* v, double* outv, int n)
+        private static void mult_Atv(double* v, double* outv, int n)
         {
             Parallel.For(0, n, i =>
             {
@@ -60,7 +60,7 @@ namespace spectral_norm
             });
         }
 
-        static unsafe void mult_AtAv(double* v, double* outv, int n)
+        private static void mult_AtAv(double* v, double* outv, int n)
         {
             fixed (double* tmp = new double[n])
             {
@@ -69,7 +69,7 @@ namespace spectral_norm
             }
         }
 
-        static unsafe void Main(string[] args)
+        static void Main(string[] args)
         {
             int n = 10000;
             if (args.Length > 0) n = int.Parse(args[0]);
