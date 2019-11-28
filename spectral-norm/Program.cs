@@ -1,0 +1,100 @@
+﻿using System;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace spectral_norm
+{
+	public class Program
+	{
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		private static double A(int i, int j)
+		{
+			return (i + j) * (i + j + 1) / 2 + i + 1;
+		}
+
+		private static unsafe double dot(double* v, double* u, int n)
+		{
+			double sum = 0;
+			for (var i = 0; i < n; i++)
+				sum += v[i] * u[i];
+			return sum;
+		}
+
+		[MethodImpl(MethodImplOptions.AggressiveOptimization)]
+		private static unsafe void mult_Av(double* v, double* outv, int n)
+		{
+			Parallel.For(0, n, i =>
+			{
+				var sum = Vector128<double>.Zero;
+				for (var j = 0; j < n; j += 2)
+				{
+					var b = Sse2.LoadVector128(v + j);
+					var a = Vector128.Create(A(i, j), A(i, j + 1));
+					sum = Sse2.Add(sum, Sse2.Divide(b, a));
+				}
+
+				var add = Sse3.HorizontalAdd(sum, sum);
+				var value = Unsafe.As<Vector128<double>, double>(ref add);
+				Unsafe.WriteUnaligned(outv + i, value);
+			});
+		}
+
+		[MethodImpl(MethodImplOptions.AggressiveOptimization)]
+		private static unsafe void mult_Atv(double* v, double* outv, int n)
+		{
+			Parallel.For(0, n, i =>
+			{
+				var sum = Vector128<double>.Zero;
+				for (var j = 0; j < n; j += 2)
+				{
+					var b = Sse2.LoadVector128(v + j);
+					var a = Vector128.Create(A(j, i), A(j + 1, i));
+					sum = Sse2.Add(sum, Sse2.Divide(b, a));
+				}
+
+				var add = Sse3.HorizontalAdd(sum, sum);
+				var value = Unsafe.As<Vector128<double>, double>(ref add);
+				Unsafe.WriteUnaligned(outv + i, value);
+			});
+		}
+
+		static unsafe void mult_AtAv(double* v, double* outv, int n)
+		{
+			fixed (double* tmp = new double[n])
+			{
+				mult_Av(v, tmp, n);
+				mult_Atv(tmp, outv, n);
+			}
+		}
+
+		static unsafe void Main(string[] args)
+		{
+			int n = 10000;
+			if (args.Length > 0) n = int.Parse(args[0]);
+
+			Stopwatch sw = Stopwatch.StartNew();
+
+			fixed (double* u = new double[n])
+			fixed (double* v = new double[n])
+			{
+				new Span<double>(u, n).Fill(1);
+				for (var i = 0; i < 10; i++)
+				{
+					mult_AtAv(u, v, n);
+					mult_AtAv(v, u, n);
+				}
+
+				var result = Math.Sqrt(dot(u, v, n) / dot(v, v, n));
+				Interlocked.MemoryBarrier();
+				var b = sw.ElapsedMilliseconds;
+				Interlocked.MemoryBarrier();
+				Console.WriteLine(b);
+				Console.WriteLine(result);
+			}
+		}
+	}
+}
