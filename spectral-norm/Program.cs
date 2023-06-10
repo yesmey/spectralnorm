@@ -1,13 +1,13 @@
 ﻿using System;
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
-using System.Runtime.Intrinsics.X86;
 using System.Threading.Tasks;
 
 namespace SpectralNorm
 {
-    class Program
+    unsafe class Program
     {
         public static void Main(string[] args)
         {
@@ -20,11 +20,11 @@ namespace SpectralNorm
 
         private static double Spectralnorm(int n)
         {
-            var u = new double[n + 3];
-            var v = new double[n + 3];
-            var tmp = new double[n + 3];
+            double* u = (double*)NativeMemory.AlignedAlloc((nuint)(n + Vector128<double>.Count) * sizeof(double), (nuint)Vector128<byte>.Count);
+            double* v = (double*)NativeMemory.AlignedAlloc((nuint)(n + Vector128<double>.Count) * sizeof(double), (nuint)Vector128<byte>.Count);
+            double* tmp = (double*)NativeMemory.AlignedAlloc((nuint)(n + Vector128<double>.Count) * sizeof(double), (nuint)Vector128<byte>.Count);
 
-            u.AsSpan(0..n).Fill(1);
+            new Span<double>(u, n).Fill(1);
 
             for (var i = 0; i < 10; i++)
             {
@@ -32,7 +32,13 @@ namespace SpectralNorm
                 Mult_at_av(v, u, tmp, n);
             }
 
-            return Math.Sqrt(Dot(u, v, n) / Dot(v, v, n));
+            double result = Math.Sqrt(Dot(u, v, n) / Dot(v, v, n));
+
+            NativeMemory.AlignedFree(u);
+            NativeMemory.AlignedFree(v);
+            NativeMemory.AlignedFree(tmp);
+
+            return result;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -41,7 +47,7 @@ namespace SpectralNorm
             return ((i + j) * (i + j + 1) >> 1) + i + 1;
         }
 
-        private static double Dot(double[] v, double[] u, int n)
+        private static double Dot(double* v, double* u, int n)
         {
             double sum = 0;
             for (var i = 0; i < n; i++)
@@ -49,56 +55,44 @@ namespace SpectralNorm
             return sum;
         }
 
-        private static void Mult_av(double[] v, double[] outv, int n)
+        private static void Mult_av(double* v, double* outv, int n)
         {
             Parallel.For(0, n, i =>
             {
-                ref double v_ref = ref MemoryMarshal.GetArrayDataReference(v);
                 Vector128<double> sum = Vector128<double>.Zero;
-                for (var j = 0; j < n; j += 2)
+                for (int j = 0; j < n; j += Vector128<double>.Count)
                 {
-                    Vector128<double> b = LoadVector128(ref v_ref, j);
+                    Vector128<double> b = Vector128.LoadAligned(v + j);
                     Vector128<double> a = Vector128.Create(A(i, j), A(i, j + 1));
-                    sum = Sse2.Add(sum, Sse2.Divide(b, a));
+                    sum = Vector128.Add(sum, Vector128.Divide(b, a));
                 }
 
-                Vector128<double> add = Sse3.HorizontalAdd(sum, sum);
-                double value = Unsafe.As<Vector128<double>, double>(ref add);
-                Unsafe.WriteUnaligned(ref Unsafe.As<double, byte>(ref GetArrayReference(outv, i)), value);
+                double value = Vector128.Sum(sum);
+                Unsafe.WriteUnaligned(outv + i, value);
             });
         }
 
-        private static void Mult_atv(double[] v, double[] outv, int n)
+        private static void Mult_atv(double* v, double* outv, int n)
         {
             Parallel.For(0, n, i =>
             {
-                ref double v_ref = ref MemoryMarshal.GetArrayDataReference(v);
                 Vector128<double> sum = Vector128<double>.Zero;
-                for (var j = 0; j < n; j += 2)
+                for (int j = 0; j < n; j += Vector128<double>.Count)
                 {
-                    Vector128<double> b = LoadVector128(ref v_ref, j);
+                    Vector128<double> b = Vector128.LoadAligned(v + j);
                     Vector128<double> a = Vector128.Create(A(j, i), A(j + 1, i));
-                    sum = Sse2.Add(sum, Sse2.Divide(b, a));
+                    sum = Vector128.Add(sum, Vector128.Divide(b, a));
                 }
 
-                Vector128<double> add = Sse3.HorizontalAdd(sum, sum);
-                double value = Unsafe.As<Vector128<double>, double>(ref add);
-                Unsafe.WriteUnaligned(ref Unsafe.As<double, byte>(ref GetArrayReference(outv, i)), value);
+                double value = Vector128.Sum(sum);
+                Unsafe.WriteUnaligned(outv + i, value);
             });
         }
 
-        private static void Mult_at_av(double[] v, double[] outv, double[] tmp, int n)
+        private static void Mult_at_av(double* v, double* outv, double* tmp, int n)
         {
             Mult_av(v, tmp, n);
             Mult_atv(tmp, outv, n);
         }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static ref T GetArrayReference<T>(T[] array, nint offset)
-            => ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(array), offset);
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static Vector128<double> LoadVector128(ref double start, nint offset)
-            => Unsafe.ReadUnaligned<Vector128<double>>(ref Unsafe.As<double, byte>(ref Unsafe.Add(ref start, offset)));
     }
 }
